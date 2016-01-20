@@ -11,6 +11,6 @@ srv.start()
 while True:
   import time
   time.sleep(1)
-  srv.stop()
 
+srv.stop()
 srv.wait_for_all()
