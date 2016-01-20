@@ -1,8 +1,10 @@
 import SocketServer
 import threading
-import signal
 import socket
 import struct
+import select
+import logging
+
 
 def socket_orginal_dst(s):
   SO_ORIGINAL_DST = 80
@@ -36,41 +38,55 @@ _UDP_STR = 'udp'
 PROTO_TCP = [ _TCP_STR ]
 PROTO_UDP = [ _UDP_STR ]
 
+def tcp_receive_all(sock, timeout=2, chunk_size=2048):
+  q = select.poll()
+  q.register(sock.fileno(), select.POLLIN | select.POLLPRI | select.POLLHUP | select.POLLERR)
+  data = ''
+  while True:
+    ev = q.poll(timeout)
+    if len(ev) != 1:
+      return data
+    fd, flag = ev[0]
+    if not ( flag & (select.POLLIN | select.POLLPRI) ):
+      return data
+    chunk = sock.recv(chunk_size)
+    if not len(chunk) > 0:
+      return data
+    data += chunk
+
 def tcp_query_response(connection, address, server):
-  print "++ TCP"
-  pass
+  message = tcp_receive_all(connection)
+  response = server.callback(server, message, address)
+  if response:
+    connection.sendall(response)
 
-def udp_query_response(connection, address, server):
-  print "++ UDP"
-  pass
+def udp_query_response(data, address, server):
+  message, sock = data
+  response = server.callback(server, message, address)
+  if response:
+    sock.sendto(response, address)
 
+def dummy_handler(server, address, message):
+  pass
 
 class IpServices(object):
   servers = None
   threads = None
-  tcp_proxy = tcp_query_response
-  udp_proxy = udp_query_response
+  services = None
 
   def __init__(self, handler=None):
+    self.services = []
     self.servers = []
     self.threads = []
-    self.handler = handler
+    self.handler = handler if handler else dummy_handler
 
-  def _server_start_thread(self, server_no, server):
-    print "Starting server", server
+  def _server_start_thread(self, server):
+    logging.info("Starting server {0} ... ".format(repr(server)))
     server.serve_forever()
-    print "Done serving ..."
 
   def _add_srv(self, srv_class, listen_on, proxy):
-    srv = srv_class(listen_on, proxy)
-    print "New instance ", srv, listen_on
-    srv.callback = self.handler
-    srv_no = len(self.servers)
-    srv.server_id = srv_no
-    th = threading.Thread(target=self._server_start_thread, args=[srv_no, srv])
-    th.daemon = True
-    self.servers.append(srv)
-    self.threads.append(th)
+    self.services.append((srv_class, listen_on, proxy))
+    logging.info("Will listen on {0}  ".format(listen_on))
 
   def add(self, port, proto=None, address=None):
     do_tcp = True
@@ -84,12 +100,22 @@ class IpServices(object):
       if _UDP_STR not in proto:
         do_udp = False
     if do_tcp:
-      self._add_srv(MyTcpServer, listen_address, self.tcp_proxy)
+      self._add_srv(MyTcpServer, listen_address, tcp_query_response)
     if do_udp:
-      self._add_srv(MyUdpServer, listen_address, self.udp_proxy)
+      self._add_srv(MyUdpServer, listen_address, udp_query_response)
 
   def start(self):
-    for th in self.threads:
+    for entry in self.services:
+      srv_class, listen_on, proxy = entry
+      logging.info("Start listener {0} on {1} ".format(repr(srv_class), listen_on))
+      srv = srv_class(listen_on, proxy)
+      srv.callback = self.handler
+      srv_no = len(self.servers)
+      srv.server_id = srv_no
+      self.servers.append(srv)
+      th = threading.Thread(target=self._server_start_thread, args=[srv])
+      th.daemon = True
+      self.threads.append(th)
       th.start()
 
   def stop(self):
@@ -102,15 +128,30 @@ class IpServices(object):
       if th.isAlive():
         th.join()
 
+  def idle_loop(self, sleep_time=0.1):
 
+    import signal
+    import time
 
+    def sig_stop(s, _):
+      logging.info("STOP SIGNAL {0}".format(s))
+      self.stop()
 
+    def sig_hup(s, _):
+      logging.info("HUP SIGNAL {0}".format(s))
+      self.stop()
+      self.wait_for_all()
+      self.start()
 
+    signal.signal(signal.SIGTERM, sig_stop)
+    signal.signal(signal.SIGTERM, sig_stop)
+    signal.signal(signal.SIGHUP, sig_hup)
 
-
-
-
-#x = TCPUDPmachine("0.0.0.0",3333,messageHandlerClass)
-#x.run()
-
-
+    self.start()
+    try:
+      while True:
+        time.sleep(sleep_time)
+    except KeyboardInterrupt:
+      logging.info("STOP: KeyboardInterrupt")
+      self.stop()
+    self.wait_for_all()
