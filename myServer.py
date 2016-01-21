@@ -55,14 +55,18 @@ def tcp_receive_all(sock, timeout=2, chunk_size=2048):
     data += chunk
 
 def tcp_query_response(connection, address, server):
+  print "TCP: read"
   message = tcp_receive_all(connection)
-  response = server.callback(server, message, address)
+  print "TCP: handle"
+  response = server.callback(server, address, message)
   if response:
     connection.sendall(response)
 
 def udp_query_response(data, address, server):
+  print "UDP: init"
   message, sock = data
-  response = server.callback(server, message, address)
+  print "UDP: handle"
+  response = server.callback(server, address, message)
   if response:
     sock.sendto(response, address)
 
@@ -82,7 +86,11 @@ class IpServices(object):
 
   def _server_start_thread(self, server):
     logging.info("Starting server {0} ... ".format(repr(server)))
-    server.serve_forever()
+    try:
+      server.serve_forever()
+    except Exception as err:
+      logging.error("Fail on listen loop: {0}".format(str(err)))
+    logging.info("Stopping server {0} ... ".format(repr(server)))
 
   def _add_srv(self, srv_class, listen_on, proxy):
     self.services.append((srv_class, listen_on, proxy))

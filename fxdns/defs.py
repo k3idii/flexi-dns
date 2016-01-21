@@ -1,8 +1,8 @@
 from fxdns.prototypes import *
 
 
-class QueryRecord(packable, unpackable):
+class QueryRecord(WireInterface):
   pass
 
-class ResourceRecord(packable, unpackable):
+class ResourceRecord(WireInterface):
   pass
