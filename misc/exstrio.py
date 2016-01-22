@@ -27,36 +27,36 @@ def unpack_ex(fmt, data, into=None):
   return dict((into[i], parts[i]) for i in range(len(parts)))
 
 
-def make_exstrio(pos_or_name=1, arg_is_pos = None):
+def make_exstrio(arg):
+  if isinstance(arg, ExStrIO):
+    return arg
+  return ExStrIO(arg)
 
+
+def exstrio_wrapper(pos_or_name=1, arg_is_pos=None):
   if not arg_is_pos:
     if isinstance(pos_or_name, int):
       arg_is_pos = True
     else:
       arg_is_pos = False
 
-  def _fix(arg):
-    if isinstance(arg, ExStrIO):
-      return arg
-    return ExStrIO(arg)
-
   def _wrap1(f):
 
     def _wrap2_name(*a, **kw):
       if pos_or_name in kw:
-        kw[pos_or_name] = _fix(kw[pos_or_name])
+        kw[pos_or_name] = make_exstrio(kw[pos_or_name])
       else:
         a = list(a)
         idx = f.func_code.co_varnames.index(pos_or_name)
-        a[idx] = _fix(a[idx])
+        a[idx] = make_exstrio(a[idx])
       return f(*a, **kw)
 
-    def _wrap2_pos(*a , **kw):
-      a = lista(a)
-      a[pos_or_name] = _fix(a[pos_or_name])
+    def _wrap2_pos(*a, **kw):
+      a = list(a)
+      a[pos_or_name] = make_exstrio(a[pos_or_name])
       return f(*a, **kw)
 
-    if arg_is_pos :
+    if arg_is_pos:
       return _wrap2_pos
     else:
       return _wrap2_name
@@ -65,6 +65,12 @@ def make_exstrio(pos_or_name=1, arg_is_pos = None):
 
 
 class ExStrIO(StringIO):
+  _jump_stack = None
+
+  def __init__(self, *a, **kw):
+    self._jump_stack = list()
+    StringIO.__init__(self, *a, **kw)
+
   def read_n(self, n):
     d = self.read(n)
     if not d or len(d) < n:
@@ -84,7 +90,7 @@ class ExStrIO(StringIO):
       return None
 
   def read_the_rest(self):
-    n =  self.available_bytes()
+    n = self.available_bytes()
     return self.read_n(n)
 
   def append(self, data):
@@ -128,28 +134,39 @@ class ExStrIO(StringIO):
   def get_pos(self):
     return self.tell()
 
-  def hex_dump(self, bytes=16, title=None, head=True):
-    S = ' \n'
+  def push(self):
+    self._jump_stack.append(self.tell())
+
+  def pop(self, restore_position=False):
+    if restore_position:
+      self.seek(self._jump_stack.pop(), os.SEEK_SET)
+    else:
+      self._jump_stack.pop()
+
+  def goto(self, pos):
+    self.seek(pos, os.SEEK_SET)
+
+  def hex_dump(self, columns=16, title=None, head=True):
+    rets = ' \n'
     if head:
       if title:
-        S += " .----[ %s ]----- \n" % title
-      S += "| offset          ascii                 hex   \n"
+        rets += " .----[ %s ]----- \n" % title
+      rets += "| offset          ascii                 hex   \n"
     p = self.tell()  # save
     self.seek(0)  # rewind
-    fmt = "| 0x%08X %-" + str(bytes) + "s \t %s\n"
+    fmt = "| 0x%08X %-" + str(columns) + "s \t %s\n"
     while True:
       of = self.tell()
-      chunk = self.read(bytes)
+      chunk = self.read(columns)
       hx = ''
       ch = ''
       for c in list(chunk):
-        ch += c if ord(c) >= 32 and ord(c) < 127 else '.'
+        ch += c if 32 <= ord(c) < 127 else '.'
         hx += "%02X " % ord(c)
-      S += fmt % (of, ch, hx)
-      if len(chunk) < bytes:
+      rets += fmt % (of, ch, hx)
+      if len(chunk) < columns:
         break
-    S += "| 0x%08X \n" % self.tell()
-    S += "`-- \n"
+    rets += "| 0x%08X \n" % self.tell()
+    rets += "`-- \n"
     self.seek(p)
-    return S
-
+    return rets
